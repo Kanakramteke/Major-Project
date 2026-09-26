@@ -1,0 +1,43 @@
+# Python environments and cache
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Frontend dependencies and build output
+node_modules/
+dist/
+
+# Dataset files
+ml/data/raw/
+ml/data/processed/
+ml/data/preprocessed/
+
+# Model checkpoints and generated artifacts
+*.pth
+*.pt
+*.h5
+*.keras
+*.onnx
+
+# Generated runtime files
+backend/uploads/
+backend/generated_gradcam/
+backend/generated_reports/
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

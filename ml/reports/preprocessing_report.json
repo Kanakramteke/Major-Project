@@ -1,0 +1,26 @@
+{
+    "dataset": "Brain Tumor MRI Dataset",
+    "source_directory": "D:\\Projects\\Medexplain_AI\\ml\\data\\raw\\dataset",
+    "processed_directory": "D:\\Projects\\Medexplain_AI\\ml\\data\\processed",
+    "classes": [
+        "glioma",
+        "meningioma",
+        "notumor",
+        "pituitary"
+    ],
+    "original_total_images": 7200,
+    "original_training_images": 5600,
+    "original_testing_images": 1600,
+    "corrupted_images_detected": 0,
+    "original_unique_exact_hashes": 7013,
+    "duplicate_copies_skipped": 187,
+    "processed_images": 7013,
+    "failed_images": 0,
+    "target_dimensions": [
+        224,
+        224
+    ],
+    "color_mode": "RGB",
+    "resize_method": "Aspect-ratio-preserving padding",
+    "raw_dataset_modified": false
+}

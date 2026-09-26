@@ -1,0 +1,6 @@
+Model,Test Accuracy,Weighted Precision,Weighted Recall,Weighted F1
+EfficientNet-B0,92.17,92.6,92.17,92.01
+ResNet-18,81.88,82.3,81.88,81.52
+DenseNet-201,84.28,84.26,84.28,83.73
+MobileNetV3-Large,87.75,87.99,87.75,87.47
+Feature-Level Fusion,94.0,94.41,94.0,93.87

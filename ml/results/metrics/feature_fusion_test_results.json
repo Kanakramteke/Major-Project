@@ -1,0 +1,71 @@
+{
+    "accuracy": 0.9400252525252525,
+    "weighted_precision": 0.9440632046132927,
+    "weighted_recall": 0.9400252525252525,
+    "weighted_f1_score": 0.938684250260303,
+    "confusion_matrix": [
+        [
+            309,
+            48,
+            26,
+            3
+        ],
+        [
+            2,
+            383,
+            7,
+            6
+        ],
+        [
+            0,
+            0,
+            400,
+            0
+        ],
+        [
+            0,
+            3,
+            0,
+            397
+        ]
+    ],
+    "classification_report": {
+        "glioma": {
+            "precision": 0.9935691318327974,
+            "recall": 0.8005181347150259,
+            "f1-score": 0.8866571018651362,
+            "support": 386.0
+        },
+        "meningioma": {
+            "precision": 0.8824884792626728,
+            "recall": 0.9623115577889447,
+            "f1-score": 0.9206730769230769,
+            "support": 398.0
+        },
+        "notumor": {
+            "precision": 0.9237875288683602,
+            "recall": 1.0,
+            "f1-score": 0.9603841536614646,
+            "support": 400.0
+        },
+        "pituitary": {
+            "precision": 0.9778325123152709,
+            "recall": 0.9925,
+            "f1-score": 0.9851116625310173,
+            "support": 400.0
+        },
+        "accuracy": 0.9400252525252525,
+        "macro avg": {
+            "precision": 0.9444194130697753,
+            "recall": 0.9388324231259927,
+            "f1-score": 0.9382064987451737,
+            "support": 1584.0
+        },
+        "weighted avg": {
+            "precision": 0.9440632046132927,
+            "recall": 0.9400252525252525,
+            "f1-score": 0.938684250260303,
+            "support": 1584.0
+        }
+    }
+}

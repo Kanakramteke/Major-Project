@@ -1,0 +1,83 @@
+{
+    "model": "ResNet-18",
+    "checkpoint_epoch": 10,
+    "test_samples": 1584,
+    "correct_predictions": 1297,
+    "misclassified_predictions": 287,
+    "test_accuracy": 0.8188131313131313,
+    "weighted_precision": 0.8230069063584294,
+    "weighted_recall": 0.8188131313131313,
+    "weighted_f1_score": 0.8152138345897246,
+    "macro_f1_score": 0.8145762612140638,
+    "class_names": [
+        "glioma",
+        "meningioma",
+        "notumor",
+        "pituitary"
+    ],
+    "confusion_matrix": [
+        [
+            255,
+            89,
+            30,
+            12
+        ],
+        [
+            25,
+            286,
+            49,
+            38
+        ],
+        [
+            2,
+            6,
+            391,
+            1
+        ],
+        [
+            5,
+            30,
+            0,
+            365
+        ]
+    ],
+    "classification_report": {
+        "glioma": {
+            "precision": 0.8885017421602788,
+            "recall": 0.6606217616580311,
+            "f1-score": 0.7578008915304606,
+            "support": 386.0
+        },
+        "meningioma": {
+            "precision": 0.6958637469586375,
+            "recall": 0.7185929648241206,
+            "f1-score": 0.7070457354758962,
+            "support": 398.0
+        },
+        "notumor": {
+            "precision": 0.8319148936170213,
+            "recall": 0.9775,
+            "f1-score": 0.8988505747126436,
+            "support": 400.0
+        },
+        "pituitary": {
+            "precision": 0.8774038461538461,
+            "recall": 0.9125,
+            "f1-score": 0.8946078431372549,
+            "support": 400.0
+        },
+        "accuracy": 0.8188131313131313,
+        "macro avg": {
+            "precision": 0.823421057222446,
+            "recall": 0.817303681620538,
+            "f1-score": 0.8145762612140638,
+            "support": 1584.0
+        },
+        "weighted avg": {
+            "precision": 0.8230069063584294,
+            "recall": 0.8188131313131313,
+            "f1-score": 0.8152138345897246,
+            "support": 1584.0
+        }
+    }
+}
