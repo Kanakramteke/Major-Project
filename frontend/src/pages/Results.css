@@ -504,3 +504,41 @@
     width: 100%;
   }
 }
+
+.gradcam-no-tumor-notice {
+  min-height: 280px;
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  border: 1px solid #dfe3f0;
+  border-radius: 14px;
+  background: #f8f9fd;
+}
+
+.gradcam-no-tumor-notice-icon {
+  width: 52px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+  border-radius: 14px;
+  background: #e9ecfa;
+  color: #374375;
+}
+
+.gradcam-no-tumor-notice h3 {
+  margin: 0 0 10px;
+  color: #26345f;
+  font-size: 18px;
+}
+
+.gradcam-no-tumor-notice p {
+  max-width: 420px;
+  margin: 0;
+  color: #64708a;
+  line-height: 1.7;
+}

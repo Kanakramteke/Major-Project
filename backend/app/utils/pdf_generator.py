@@ -1,3 +1,4 @@
+
 """
 MedExplain AI - Professional Clinical PDF Generator
 
@@ -5,6 +6,9 @@ Generates a professional AI-assisted brain MRI report PDF
 containing patient information, doctor information, AI
 classification, MRI visualizations, Grad-CAM explanation,
 and clinical disclaimer.
+
+For No Tumor predictions, only the original MRI is shown.
+Grad-CAM overlay and heatmap images are excluded.
 """
 
 from datetime import datetime
@@ -18,7 +22,6 @@ from reportlab.lib.units import mm
 from reportlab.platypus import (
     HRFlowable,
     Image,
-    KeepTogether,
     Paragraph,
     SimpleDocTemplate,
     Spacer,
@@ -61,7 +64,6 @@ LIGHT_BACKGROUND = colors.HexColor("#F7F8FB")
 SECTION_BACKGROUND = colors.HexColor("#EEF1F7")
 ACCENT_COLOR = colors.HexColor("#374375")
 SUCCESS_COLOR = colors.HexColor("#287D5A")
-WARNING_COLOR = colors.HexColor("#9A6700")
 
 
 # ============================================================
@@ -69,9 +71,7 @@ WARNING_COLOR = colors.HexColor("#9A6700")
 # ============================================================
 
 def safe_text(value, fallback="Not provided"):
-    """
-    Convert a value to displayable text.
-    """
+    """Convert a value to displayable text."""
     if value is None:
         return fallback
 
@@ -84,28 +84,50 @@ def safe_text(value, fallback="Not provided"):
 
 
 def format_prediction_class(predicted_class):
-    """
-    Convert database class names into report-friendly labels.
-    """
-
+    """Convert database class names into report-friendly labels."""
     if not predicted_class:
         return "Not available"
 
-    if predicted_class == "notumor":
+    normalized_class = (
+        str(predicted_class)
+        .strip()
+        .lower()
+        .replace("_", "")
+        .replace(" ", "")
+    )
+
+    if normalized_class == "notumor":
         return "No Tumor Detected"
 
     return (
-        predicted_class
+        str(predicted_class)
         .replace("_", " ")
         .title()
     )
 
 
-def format_gender(gender):
+def is_no_tumor_prediction(predicted_class):
     """
-    Format patient gender for display.
-    """
+    Identify No Tumor predictions.
 
+    Supports common stored labels such as:
+    notumor, no_tumor, and No Tumor.
+    """
+    normalized_class = (
+        str(predicted_class or "")
+        .strip()
+        .lower()
+        .replace("_", "")
+        .replace(" ", "")
+    )
+
+    return normalized_class in {
+        "notumor",
+    }
+
+
+def format_gender(gender):
+    """Format patient gender for display."""
     if not gender:
         return "Not provided"
 
@@ -113,10 +135,7 @@ def format_gender(gender):
 
 
 def format_datetime(value):
-    """
-    Format a datetime value for the report.
-    """
-
+    """Format a datetime value for the report."""
     if not value:
         return "Not available"
 
@@ -129,10 +148,7 @@ def format_datetime(value):
 
 
 def get_probability(probabilities, class_name):
-    """
-    Return a class probability as a percentage.
-    """
-
+    """Return a class probability as a percentage."""
     if not probabilities:
         return 0.0
 
@@ -150,7 +166,6 @@ def build_image_path(path_value):
 
     The prediction database stores absolute Windows paths.
     """
-
     if not path_value:
         return None
 
@@ -175,10 +190,7 @@ def build_image_path(path_value):
 
 
 def create_report_id(report_id, created_at):
-    """
-    Generate a readable MedExplain report identifier.
-    """
-
+    """Generate a readable MedExplain report identifier."""
     if created_at:
         date_part = created_at.strftime(
             "%Y%m%d"
@@ -198,10 +210,7 @@ def create_report_id(report_id, created_at):
 # ============================================================
 
 def build_styles():
-    """
-    Build ReportLab paragraph styles.
-    """
-
+    """Build ReportLab paragraph styles."""
     styles = getSampleStyleSheet()
 
     return {
@@ -351,10 +360,7 @@ def draw_page_header_footer(
     canvas,
     doc,
 ):
-    """
-    Draw consistent page header and footer.
-    """
-
+    """Draw consistent page header and footer."""
     canvas.saveState()
 
     # Top line
@@ -403,10 +409,7 @@ def create_information_table(
     rows,
     styles,
 ):
-    """
-    Create a two-column information section.
-    """
-
+    """Create a two-column information section."""
     content = []
 
     for label, value in rows:
@@ -508,10 +511,7 @@ def create_visualization_card(
     image_path,
     styles,
 ):
-    """
-    Create one MRI/Grad-CAM image card.
-    """
-
+    """Create one MRI/Grad-CAM image card."""
     if image_path is None:
         image_content = Paragraph(
             "Visualization unavailable",
@@ -621,6 +621,10 @@ def generate_clinical_report_pdf(
     """
     Generate a professional MedExplain AI clinical report PDF.
 
+    No Tumor predictions show only the original MRI.
+    Tumor predictions show the original MRI, Grad-CAM overlay,
+    and heatmap.
+
     Parameters
     ----------
     report_id:
@@ -675,6 +679,10 @@ def generate_clinical_report_pdf(
         prediction.predicted_class
     )
 
+    is_no_tumor = is_no_tumor_prediction(
+        prediction.predicted_class
+    )
+
     confidence = float(
         prediction.confidence_percent or 0
     )
@@ -692,13 +700,19 @@ def generate_clinical_report_pdf(
         prediction.image_path
     )
 
-    overlay_path = build_image_path(
-        prediction.overlay_visualization_path
-    )
+    # Do not even resolve or include Grad-CAM paths
+    # for No Tumor predictions.
+    if is_no_tumor:
+        overlay_path = None
+        heatmap_path = None
+    else:
+        overlay_path = build_image_path(
+            prediction.overlay_visualization_path
+        )
 
-    heatmap_path = build_image_path(
-        prediction.heatmap_visualization_path
-    )
+        heatmap_path = build_image_path(
+            prediction.heatmap_visualization_path
+        )
 
     # --------------------------------------------------------
     # Document
@@ -1001,9 +1015,7 @@ def generate_clinical_report_pdf(
         )
     )
 
-    story.append(
-        classification_table
-    )
+    story.append(classification_table)
 
     story.append(
         Spacer(1, 5 * mm)
@@ -1051,78 +1063,140 @@ def generate_clinical_report_pdf(
 
     story.append(
         Paragraph(
-            "IMAGING & VISUAL EXPLANATION",
+            (
+                "MRI IMAGE"
+                if is_no_tumor
+                else "IMAGING & VISUAL EXPLANATION"
+            ),
             styles["section_title"],
         )
     )
 
-    visualizations = Table(
-        [
-            [
-                create_visualization_card(
-                    "ORIGINAL MRI",
-                    original_path,
-                    styles,
-                ),
-                create_visualization_card(
-                    "GRAD-CAM OVERLAY",
-                    overlay_path,
-                    styles,
-                ),
-                create_visualization_card(
-                    "HEATMAP",
-                    heatmap_path,
-                    styles,
-                ),
-            ]
-        ],
-        colWidths=[
-            57 * mm,
-            57 * mm,
-            57 * mm,
-        ],
-    )
-
-    visualizations.setStyle(
-        TableStyle(
-            [
-                (
-                    "VALIGN",
-                    (0, 0),
-                    (-1, -1),
-                    "TOP",
-                ),
-                (
-                    "LEFTPADDING",
-                    (0, 0),
-                    (-1, -1),
-                    2,
-                ),
-                (
-                    "RIGHTPADDING",
-                    (0, 0),
-                    (-1, -1),
-                    2,
-                ),
-                (
-                    "TOPPADDING",
-                    (0, 0),
-                    (-1, -1),
-                    0,
-                ),
-                (
-                    "BOTTOMPADDING",
-                    (0, 0),
-                    (-1, -1),
-                    0,
-                ),
-            ]
+    if is_no_tumor:
+        # No Tumor: show only the original MRI.
+        original_card = create_visualization_card(
+            "ORIGINAL MRI",
+            original_path,
+            styles,
         )
-    )
 
-    story.append(
-        visualizations
-    )
+        original_table = Table(
+            [[original_card]],
+            colWidths=[57 * mm],
+        )
+
+        original_table.setStyle(
+            TableStyle(
+                [
+                    (
+                        "VALIGN",
+                        (0, 0),
+                        (-1, -1),
+                        "TOP",
+                    ),
+                    (
+                        "ALIGN",
+                        (0, 0),
+                        (-1, -1),
+                        "LEFT",
+                    ),
+                    (
+                        "LEFTPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        2,
+                    ),
+                    (
+                        "RIGHTPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        2,
+                    ),
+                    (
+                        "TOPPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        0,
+                    ),
+                    (
+                        "BOTTOMPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        0,
+                    ),
+                ]
+            )
+        )
+
+        story.append(original_table)
+
+    else:
+        # Tumor prediction: show original MRI and Grad-CAM images.
+        visualizations = Table(
+            [
+                [
+                    create_visualization_card(
+                        "ORIGINAL MRI",
+                        original_path,
+                        styles,
+                    ),
+                    create_visualization_card(
+                        "GRAD-CAM OVERLAY",
+                        overlay_path,
+                        styles,
+                    ),
+                    create_visualization_card(
+                        "HEATMAP",
+                        heatmap_path,
+                        styles,
+                    ),
+                ]
+            ],
+            colWidths=[
+                57 * mm,
+                57 * mm,
+                57 * mm,
+            ],
+        )
+
+        visualizations.setStyle(
+            TableStyle(
+                [
+                    (
+                        "VALIGN",
+                        (0, 0),
+                        (-1, -1),
+                        "TOP",
+                    ),
+                    (
+                        "LEFTPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        2,
+                    ),
+                    (
+                        "RIGHTPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        2,
+                    ),
+                    (
+                        "TOPPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        0,
+                    ),
+                    (
+                        "BOTTOMPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        0,
+                    ),
+                ]
+            )
+        )
+
+        story.append(visualizations)
 
     story.append(
         Spacer(1, 5 * mm)
@@ -1137,17 +1211,29 @@ def generate_clinical_report_pdf(
         "No explainability information was saved.",
     )
 
-    explanation_text = (
-        f"<b>The model classified the MRI scan as "
-        f"{predicted_label} with "
-        f"{confidence:.2f}% confidence.</b><br/><br/>"
-        f"{explanation}<br/><br/>"
-        "The Grad-CAM visualization highlights image "
-        "regions that contributed to the model's "
-        "prediction. These highlighted regions represent "
-        "model attention and should not be interpreted "
-        "as an exact tumor boundary or segmentation result."
-    )
+    if is_no_tumor:
+        explanation_text = (
+            f"<b>The model classified the MRI scan as "
+            f"{predicted_label} with "
+            f"{confidence:.2f}% confidence.</b><br/><br/>"
+            f"{explanation}<br/><br/>"
+            "No Grad-CAM visualization is displayed for this "
+            "prediction. The model output is an AI-generated "
+            "classification and does not independently confirm "
+            "the absence of a tumor."
+        )
+    else:
+        explanation_text = (
+            f"<b>The model classified the MRI scan as "
+            f"{predicted_label} with "
+            f"{confidence:.2f}% confidence.</b><br/><br/>"
+            f"{explanation}<br/><br/>"
+            "The Grad-CAM visualization highlights image "
+            "regions that contributed to the model's "
+            "prediction. These highlighted regions represent "
+            "model attention and should not be interpreted "
+            "as an exact tumor boundary or segmentation result."
+        )
 
     story.append(
         Paragraph(
@@ -1212,9 +1298,7 @@ def generate_clinical_report_pdf(
         )
     )
 
-    story.append(
-        explanation_table
-    )
+    story.append(explanation_table)
 
     story.append(
         Spacer(1, 5 * mm)
@@ -1349,9 +1433,7 @@ def generate_clinical_report_pdf(
         )
     )
 
-    story.append(
-        probability_table
-    )
+    story.append(probability_table)
 
     story.append(
         Spacer(1, 7 * mm)
@@ -1428,9 +1510,7 @@ def generate_clinical_report_pdf(
         )
     )
 
-    story.append(
-        signature_table
-    )
+    story.append(signature_table)
 
     story.append(
         Spacer(1, 5 * mm)
@@ -1504,9 +1584,7 @@ def generate_clinical_report_pdf(
         )
     )
 
-    story.append(
-        disclaimer_table
-    )
+    story.append(disclaimer_table)
 
     # ========================================================
     # BUILD PDF

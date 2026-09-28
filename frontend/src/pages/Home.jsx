@@ -1,3 +1,4 @@
+
 import { ArrowRight, Brain, FileText, ScanSearch, ShieldCheck } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import './Home.css'
@@ -49,11 +50,6 @@ function Home() {
           </p>
 
           <div className="hero-actions">
-            <Link to="/register" className="primary-button">
-              Start Analysis
-              <ArrowRight size={18} />
-            </Link>
-
             <a href="#how-it-works" className="secondary-button">
               See How It Works
             </a>
@@ -131,7 +127,6 @@ function Home() {
             </div>
 
             <span className="feature-number">01</span>
-
             <h3>AI Diagnosis</h3>
 
             <p>
@@ -146,7 +141,6 @@ function Home() {
             </div>
 
             <span className="feature-number">02</span>
-
             <h3>Visual Explanation</h3>
 
             <p>
@@ -161,7 +155,6 @@ function Home() {
             </div>
 
             <span className="feature-number">03</span>
-
             <h3>Clinical Report</h3>
 
             <p>

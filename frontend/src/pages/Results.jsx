@@ -59,6 +59,21 @@ function Results() {
 
   /*
    * ============================================================
+   * NORMALIZE PREDICTED CLASS
+   * ============================================================
+   */
+
+  const normalizedPredictedClass = String(
+    prediction?.predicted_class || '',
+  )
+    .toLowerCase()
+    .replace(/[\s_-]/g, '')
+
+  const isNoTumorPrediction =
+    normalizedPredictedClass === 'notumor'
+
+  /*
+   * ============================================================
    * ORIGINAL MRI URL
    * ============================================================
    *
@@ -88,30 +103,64 @@ function Results() {
       )}`
   } else if (imagePreview) {
     originalImageUrl = imagePreview
-  } else if (explainability.visualization.original) {
+  } else if (explainability?.visualization?.original) {
     originalImageUrl =
       explainability.visualization.original.startsWith('http')
         ? explainability.visualization.original
         : `${apiBaseUrl}${explainability.visualization.original}`
   }
 
-  const heatmapUrl =
-    explainability.visualization.heatmap
-      ? explainability.visualization.heatmap.startsWith('http')
-        ? explainability.visualization.heatmap
-        : `${apiBaseUrl}${explainability.visualization.heatmap}`
-      : ''
+  /*
+   * ============================================================
+   * GRAD-CAM IMAGE URLS
+   * ============================================================
+   */
 
-  const overlayUrl =
-    explainability.visualization.overlay
-      ? explainability.visualization.overlay.startsWith('http')
-        ? explainability.visualization.overlay
-        : `${apiBaseUrl}${explainability.visualization.overlay}`
-      : ''
+  const heatmapPath =
+    explainability?.visualization?.heatmap || ''
+
+  const heatmapUrl = heatmapPath
+    ? heatmapPath.startsWith('http')
+      ? heatmapPath
+      : `${apiBaseUrl}${heatmapPath}`
+    : ''
+
+  const overlayPath =
+    explainability?.visualization?.overlay || ''
+
+  const overlayUrl = overlayPath
+    ? overlayPath.startsWith('http')
+      ? overlayPath
+      : `${apiBaseUrl}${overlayPath}`
+    : ''
+
+  /*
+   * ============================================================
+   * CLASS PROBABILITIES
+   * ============================================================
+   */
 
   const probabilityEntries = Object.entries(
     prediction.class_probabilities || {},
   )
+
+  /*
+   * Display small nonzero probabilities as "<0.0001%"
+   * instead of rounding them to 0.0000%.
+   */
+  function formatProbability(probability) {
+    const percentage = Number(probability) * 100
+
+    if (!Number.isFinite(percentage)) {
+      return '—'
+    }
+
+    if (percentage > 0 && percentage < 0.0001) {
+      return '<0.0001%'
+    }
+
+    return `${percentage.toFixed(4)}%`
+  }
 
   /*
    * ============================================================
@@ -156,7 +205,10 @@ function Results() {
         'noopener,noreferrer',
       )
     } catch (error) {
-      console.error('Clinical report generation failed:', error)
+      console.error(
+        'Clinical report generation failed:',
+        error,
+      )
 
       const detail = error.response?.data?.detail
 
@@ -172,8 +224,18 @@ function Results() {
     }
   }
 
+  /*
+   * ============================================================
+   * PAGE
+   * ============================================================
+   */
+
   return (
     <div className="results-page">
+      {/* ======================================================
+          HEADER
+      ====================================================== */}
+
       <div className="results-header">
         <button
           type="button"
@@ -213,6 +275,10 @@ function Results() {
         </div>
       </div>
 
+      {/* ======================================================
+          PATIENT DETAILS
+      ====================================================== */}
+
       {patient && (
         <section className="results-patient-card">
           <div className="results-patient-icon">
@@ -246,6 +312,10 @@ function Results() {
         </section>
       )}
 
+      {/* ======================================================
+          PREDICTION SUMMARY
+      ====================================================== */}
+
       <section className="results-summary-grid">
         <div className="results-summary-card prediction-card">
           <div className="results-card-icon">
@@ -256,8 +326,8 @@ function Results() {
             <span>Predicted Class</span>
 
             <strong>
-              {prediction.predicted_class
-                .replace('_', ' ')
+              {String(prediction.predicted_class || '')
+                .replace(/[_-]/g, ' ')
                 .replace(/\b\w/g, (letter) =>
                   letter.toUpperCase(),
                 )}
@@ -274,7 +344,10 @@ function Results() {
             <span>Confidence</span>
 
             <strong>
-              {prediction.confidence_percent.toFixed(2)}%
+              {Number(
+                prediction.confidence_percent || 0,
+              ).toFixed(2)}
+              %
             </strong>
           </div>
         </div>
@@ -288,7 +361,7 @@ function Results() {
             <span>Model Device</span>
 
             <strong>
-              {prediction.device.toUpperCase()}
+              {String(prediction.device || '—').toUpperCase()}
             </strong>
           </div>
         </div>
@@ -302,11 +375,15 @@ function Results() {
             <span>Feature Dimension</span>
 
             <strong>
-              {prediction.feature_dimension}
+              {prediction.feature_dimension ?? '—'}
             </strong>
           </div>
         </div>
       </section>
+
+      {/* ======================================================
+          CLASS PROBABILITIES
+      ====================================================== */}
 
       <section className="results-section">
         <div className="results-section-heading">
@@ -322,7 +399,25 @@ function Results() {
         <div className="probability-list">
           {probabilityEntries.map(
             ([className, probability]) => {
-              const percentage = probability * 100
+              const numericProbability =
+                Number(probability)
+
+              const percentage =
+                Number.isFinite(numericProbability)
+                  ? Math.min(
+                      100,
+                      Math.max(
+                        0,
+                        numericProbability * 100,
+                      ),
+                    )
+                  : 0
+
+              const displayClassName = className
+                .replace(/[_-]/g, ' ')
+                .replace(/\b\w/g, (letter) =>
+                  letter.toUpperCase(),
+                )
 
               return (
                 <div
@@ -330,18 +425,10 @@ function Results() {
                   key={className}
                 >
                   <div className="probability-label">
-                    <span>
-                      {className
-                        .replace('_', ' ')
-                        .replace(
-                          /\b\w/g,
-                          (letter) =>
-                            letter.toUpperCase(),
-                        )}
-                    </span>
+                    <span>{displayClassName}</span>
 
                     <strong>
-                      {percentage.toFixed(2)}%
+                      {formatProbability(probability)}
                     </strong>
                   </div>
 
@@ -360,6 +447,10 @@ function Results() {
         </div>
       </section>
 
+      {/* ======================================================
+          GRAD-CAM VISUALIZATION
+      ====================================================== */}
+
       <section className="results-section">
         <div className="results-section-heading">
           <div>
@@ -370,13 +461,16 @@ function Results() {
             <h2>Grad-CAM Visualization</h2>
 
             <p>
-              These visualizations show the image regions that
-              contributed most strongly to the model's prediction.
+              {isNoTumorPrediction
+                ? 'The model predicted No Tumor. Tumor localization is not displayed for this class.'
+                : 'These visualizations show image regions that influenced the model’s prediction. They do not identify an exact tumor boundary.'}
             </p>
           </div>
         </div>
 
         <div className="gradcam-grid">
+          {/* ORIGINAL MRI — SHOWN FOR EVERY PREDICTION */}
+
           <div className="gradcam-card">
             <div className="gradcam-card-header">
               <ImageIcon size={17} />
@@ -406,39 +500,128 @@ function Results() {
             </div>
           </div>
 
-          <div className="gradcam-card">
-            <div className="gradcam-card-header">
-              <Sparkles size={17} />
-              <span>Grad-CAM Heatmap</span>
-            </div>
+          {/* NO TUMOR MESSAGE OR TUMOR GRAD-CAM */}
 
-            <div className="gradcam-image-wrapper">
-              {heatmapUrl && (
-                <img
-                  src={heatmapUrl}
-                  alt="Grad-CAM heatmap"
-                />
-              )}
-            </div>
-          </div>
+          {isNoTumorPrediction ? (
+            <div
+              className="gradcam-card gradcam-no-tumor-notice"
+              role="note"
+              style={{
+                minHeight: '280px',
+                padding: '32px',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                textAlign: 'center',
+                background: '#f8f9fd',
+              }}
+            >
+              <div
+                style={{
+                  width: '52px',
+                  height: '52px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  marginBottom: '16px',
+                  borderRadius: '14px',
+                  background: '#e9ecfa',
+                  color: '#374375',
+                }}
+              >
+                <Brain size={24} />
+              </div>
 
-          <div className="gradcam-card gradcam-overlay-card">
-            <div className="gradcam-card-header">
-              <Brain size={17} />
-              <span>Grad-CAM Overlay</span>
-            </div>
+              <h3
+                style={{
+                  margin: '0 0 10px',
+                  color: '#26345f',
+                  fontSize: '18px',
+                }}
+              >
+                No Tumor Predicted
+              </h3>
 
-            <div className="gradcam-image-wrapper">
-              {overlayUrl && (
-                <img
-                  src={overlayUrl}
-                  alt="Grad-CAM overlay showing model attention"
-                />
-              )}
+              <p
+                style={{
+                  maxWidth: '420px',
+                  margin: 0,
+                  color: '#64708a',
+                  lineHeight: 1.7,
+                }}
+              >
+                Tumor localization is not displayed for this
+                prediction. Grad-CAM highlights model attention
+                for a selected class; it does not confirm the
+                presence or absence of a tumor.
+              </p>
             </div>
-          </div>
+          ) : (
+            <>
+              {/* GRAD-CAM HEATMAP */}
+
+              <div className="gradcam-card">
+                <div className="gradcam-card-header">
+                  <Sparkles size={17} />
+                  <span>Grad-CAM Heatmap</span>
+                </div>
+
+                <div className="gradcam-image-wrapper">
+                  {heatmapUrl ? (
+                    <img
+                      src={heatmapUrl}
+                      alt="Grad-CAM heatmap showing model attention"
+                    />
+                  ) : (
+                    <div
+                      style={{
+                        padding: '30px',
+                        textAlign: 'center',
+                        color: '#64748b',
+                      }}
+                    >
+                      Grad-CAM heatmap is unavailable.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* GRAD-CAM OVERLAY */}
+
+              <div className="gradcam-card gradcam-overlay-card">
+                <div className="gradcam-card-header">
+                  <Brain size={17} />
+                  <span>Grad-CAM Overlay</span>
+                </div>
+
+                <div className="gradcam-image-wrapper">
+                  {overlayUrl ? (
+                    <img
+                      src={overlayUrl}
+                      alt="Grad-CAM overlay showing model attention"
+                    />
+                  ) : (
+                    <div
+                      style={{
+                        padding: '30px',
+                        textAlign: 'center',
+                        color: '#64748b',
+                      }}
+                    >
+                      Grad-CAM overlay is unavailable.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </section>
+
+      {/* ======================================================
+          AI EXPLANATION
+      ====================================================== */}
 
       <section className="results-explanation">
         <div className="results-explanation-icon">
@@ -455,10 +638,15 @@ function Results() {
           </h2>
 
           <p>
-            {explainability.explanation}
+            {explainability?.explanation ||
+              'No explanation was provided for this prediction.'}
           </p>
         </div>
       </section>
+
+      {/* ======================================================
+          ANALYZED FILE AND REPORT
+      ====================================================== */}
 
       <section className="results-file-card">
         <div>
@@ -492,6 +680,8 @@ function Results() {
         </button>
       </section>
 
+      {/* REPORT ERROR */}
+
       {reportError && (
         <div
           className="results-report-error"
@@ -500,6 +690,8 @@ function Results() {
           {reportError}
         </div>
       )}
+
+      {/* REPORT SUCCESS */}
 
       {reportUrl && (
         <section className="results-report-success">
@@ -538,6 +730,10 @@ function Results() {
           </button>
         </section>
       )}
+
+      {/* ======================================================
+          DISCLAIMER
+      ====================================================== */}
 
       <div className="results-disclaimer">
         <strong>Important:</strong> This AI-generated analysis is

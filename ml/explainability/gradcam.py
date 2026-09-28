@@ -8,12 +8,20 @@ Backbones:
     - DenseNet-201
     - MobileNetV3-Large
 
-The Grad-CAM heatmaps explain the final prediction
-produced by the feature-level fusion model.
+Grad-CAM explains image regions that influenced the selected
+class score. It is not a tumor segmentation method and does
+not identify an exact tumor boundary.
 """
 
 import sys
 from pathlib import Path
+from typing import Any
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+from PIL import Image
+from torchvision import transforms
 
 
 # ==========================================================
@@ -21,19 +29,15 @@ from pathlib import Path
 # ==========================================================
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
 ML_DIR = PROJECT_ROOT / "ml"
 
 if str(ML_DIR) not in sys.path:
     sys.path.insert(0, str(ML_DIR))
 
 
-import torch
-import torch.nn.functional as F
-
-from PIL import Image
-from torchvision import transforms
-
+# ==========================================================
+# Model imports
+# ==========================================================
 
 from models.backbones import (
     create_efficientnet_b0,
@@ -53,37 +57,50 @@ from models.model_config import (
 
 
 # ==========================================================
-# Absolute fusion checkpoint path
+# Configuration
 # ==========================================================
 
-FUSION_CHECKPOINT_PATH = (
-    PROJECT_ROOT / FUSION_CHECKPOINT
-)
+IMAGE_SIZE = 224
 
+BACKBONE_ORDER = [
+    "efficientnet_b0",
+    "resnet18",
+    "densenet201",
+    "mobilenet_v3_large",
+]
+
+FUSION_CHECKPOINT_PATH = PROJECT_ROOT / FUSION_CHECKPOINT
+
+
+# ==========================================================
+# Fusion Grad-CAM
+# ==========================================================
 
 class FusionGradCAM:
     """
-    Grad-CAM for MedExplain AI's feature-level
-    fusion architecture.
+    Grad-CAM for MedExplain AI's feature-level fusion model.
+
+    The four backbone feature vectors are concatenated and
+    passed through the trained fusion head.
+
+    The Grad-CAM target is the selected class logit from the
+    fusion head, not an individual backbone prediction.
     """
 
     def __init__(
         self,
-        checkpoint_path=FUSION_CHECKPOINT_PATH,
-    ):
+        checkpoint_path: str | Path = FUSION_CHECKPOINT_PATH,
+    ) -> None:
 
         self.device = torch.device("cpu")
 
-        self.activations = {}
-        self.activation_gradients = {}
+        self.activations: dict[str, torch.Tensor] = {}
 
-        print(
-            "Loading model for Grad-CAM..."
-        )
+        print("Loading model for Grad-CAM...")
 
-        # ==================================================
-        # Load checkpoint
-        # ==================================================
+        # --------------------------------------------------
+        # Resolve checkpoint path
+        # --------------------------------------------------
 
         checkpoint_path = Path(checkpoint_path)
 
@@ -92,14 +109,16 @@ class FusionGradCAM:
 
         checkpoint_path = checkpoint_path.resolve()
 
-        print(
-            f"Checkpoint: {checkpoint_path}"
-        )
+        print(f"Checkpoint: {checkpoint_path}")
 
         if not checkpoint_path.exists():
             raise FileNotFoundError(
                 f"Fusion checkpoint not found: {checkpoint_path}"
             )
+
+        # --------------------------------------------------
+        # Load checkpoint
+        # --------------------------------------------------
 
         checkpoint = torch.load(
             checkpoint_path,
@@ -107,31 +126,22 @@ class FusionGradCAM:
             weights_only=False,
         )
 
-        # ==================================================
-        # Create backbones
-        # ==================================================
+        # --------------------------------------------------
+        # Create backbone architectures
+        # --------------------------------------------------
 
         self.backbones = {
-            "efficientnet_b0":
-                create_efficientnet_b0(),
-
-            "resnet18":
-                create_resnet18(),
-
-            "densenet201":
-                create_densenet201(),
-
-            "mobilenet_v3_large":
-                create_mobilenet_v3_large(),
+            "efficientnet_b0": create_efficientnet_b0(),
+            "resnet18": create_resnet18(),
+            "densenet201": create_densenet201(),
+            "mobilenet_v3_large": create_mobilenet_v3_large(),
         }
 
-        # ==================================================
-        # Load trained weights
-        # ==================================================
+        # --------------------------------------------------
+        # Load trained backbone weights
+        # --------------------------------------------------
 
-        backbone_states = checkpoint[
-            "backbone_state_dicts"
-        ]
+        backbone_states = checkpoint["backbone_state_dicts"]
 
         for name, model in self.backbones.items():
 
@@ -142,52 +152,52 @@ class FusionGradCAM:
             model.to(self.device)
             model.eval()
 
-        # ==================================================
+        # --------------------------------------------------
         # Convert backbones into feature extractors
-        # ==================================================
+        # --------------------------------------------------
 
-        self.backbones[
-            "efficientnet_b0"
-        ].classifier = torch.nn.Identity()
+        self.backbones["efficientnet_b0"].classifier = (
+            torch.nn.Identity()
+        )
 
-        self.backbones[
-            "resnet18"
-        ].fc = torch.nn.Identity()
+        self.backbones["resnet18"].fc = (
+            torch.nn.Identity()
+        )
 
-        self.backbones[
-            "densenet201"
-        ].classifier = torch.nn.Identity()
+        self.backbones["densenet201"].classifier = (
+            torch.nn.Identity()
+        )
 
-        self.backbones[
-            "mobilenet_v3_large"
-        ].classifier = torch.nn.Identity()
+        self.backbones["mobilenet_v3_large"].classifier = (
+            torch.nn.Identity()
+        )
 
-        # ==================================================
-        # Create fusion head
-        # ==================================================
+        # --------------------------------------------------
+        # Create and load fusion head
+        # --------------------------------------------------
 
         self.fusion_head = FusionHead()
 
         self.fusion_head.load_state_dict(
-            checkpoint[
-                "fusion_head_state_dict"
-            ]
+            checkpoint["fusion_head_state_dict"]
         )
 
-        self.fusion_head.to(
-            self.device
-        )
-
+        self.fusion_head.to(self.device)
         self.fusion_head.eval()
 
-        # ==================================================
-        # Same preprocessing used during training
-        # ==================================================
+        # --------------------------------------------------
+        # Preprocessing
+        #
+        # Must match the backend prediction pipeline:
+        # RGB -> Resize 224x224 -> Tensor -> Normalize
+        # --------------------------------------------------
 
         self.transform = transforms.Compose(
             [
+                transforms.Resize(
+                    (IMAGE_SIZE, IMAGE_SIZE)
+                ),
                 transforms.ToTensor(),
-
                 transforms.Normalize(
                     mean=NORMALIZATION_MEAN,
                     std=NORMALIZATION_STD,
@@ -195,48 +205,40 @@ class FusionGradCAM:
             ]
         )
 
-        # ==================================================
+        # --------------------------------------------------
         # Register Grad-CAM hooks
-        # ==================================================
+        # --------------------------------------------------
 
         self._register_hooks()
 
-        print(
-            "Grad-CAM model loaded successfully."
-        )
+        print("Grad-CAM model loaded successfully.")
 
     # ======================================================
     # Register hooks
     # ======================================================
 
-    def _register_hooks(self):
+    def _register_hooks(self) -> None:
+        """
+        Register forward hooks on the final spatial feature
+        layer of each backbone.
+        """
 
         target_layers = {
-
-            "efficientnet_b0":
-                self.backbones[
-                    "efficientnet_b0"
-                ].features[-1],
-
-            "resnet18":
-                self.backbones[
-                    "resnet18"
-                ].layer4[-1],
-
-            "densenet201":
-                self.backbones[
-                    "densenet201"
-                ].features,
-
-            "mobilenet_v3_large":
-                self.backbones[
-                    "mobilenet_v3_large"
-                ].features[-1],
+            "efficientnet_b0": (
+                self.backbones["efficientnet_b0"].features[-1]
+            ),
+            "resnet18": (
+                self.backbones["resnet18"].layer4[-1]
+            ),
+            "densenet201": (
+                self.backbones["densenet201"].features
+            ),
+            "mobilenet_v3_large": (
+                self.backbones["mobilenet_v3_large"].features[-1]
+            ),
         }
 
-        for name, layer in (
-            target_layers.items()
-        ):
+        for name, layer in target_layers.items():
 
             layer.register_forward_hook(
                 self._forward_hook(name)
@@ -246,53 +248,31 @@ class FusionGradCAM:
     # Forward hook
     # ======================================================
 
-    def _forward_hook(
-        self,
-        name,
-    ):
+    def _forward_hook(self, name: str):
         """
-        Capture the activation tensor.
+        Save the feature activation used to calculate Grad-CAM.
 
-        The output is cloned before being passed
-        forward. This is particularly important for
-        DenseNet because its forward method applies
-        an in-place ReLU after the features module.
+        A clone is returned to avoid problems with later
+        in-place operations in the backbone.
         """
 
-        def hook(
-            module,
-            inputs,
-            output,
-        ):
+        def hook(module, inputs, output):
 
-            # ----------------------------------------------
-            # Clone the output.
-            #
-            # This prevents later in-place operations
-            # from causing PyTorch autograd conflicts.
-            # ----------------------------------------------
+            if not isinstance(output, torch.Tensor):
+                raise TypeError(
+                    f"Expected tensor output from {name}, "
+                    f"received {type(output)}."
+                )
 
-            safe_output = output.clone()
+            activation = output.clone()
 
-            # ----------------------------------------------
-            # Store activation
-            # ----------------------------------------------
+            self.activations[name] = activation
 
-            self.activations[name] = (
-                safe_output
-            )
+            # Gradients are retained for this intermediate tensor.
+            if activation.requires_grad:
+                activation.retain_grad()
 
-            # ----------------------------------------------
-            # Retain gradient
-            # ----------------------------------------------
-
-            safe_output.retain_grad()
-
-            # ----------------------------------------------
-            # Return cloned tensor
-            # ----------------------------------------------
-
-            return safe_output
+            return activation
 
         return hook
 
@@ -302,93 +282,85 @@ class FusionGradCAM:
 
     def _extract_features(
         self,
-        image,
-    ):
+        image: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Extract features in the same order used by the
+        trained feature-fusion model.
+        """
 
         features = []
 
-        backbone_order = [
-            "efficientnet_b0",
-            "resnet18",
-            "densenet201",
-            "mobilenet_v3_large",
-        ]
+        # --------------------------------------------------
+        # EfficientNet-B0
+        # --------------------------------------------------
 
-        for name in backbone_order:
+        model = self.backbones["efficientnet_b0"]
 
-            model = self.backbones[name]
+        output = model.features(image)
+        output = model.avgpool(output)
+        output = torch.flatten(output, 1)
 
-            if name == "efficientnet_b0":
+        features.append(output)
 
-                output = model.features(
-                    image
-                )
+        # --------------------------------------------------
+        # ResNet-18
+        # --------------------------------------------------
 
-                output = model.avgpool(
-                    output
-                )
+        model = self.backbones["resnet18"]
 
-                output = torch.flatten(
-                    output,
-                    1,
-                )
+        output = model.conv1(image)
+        output = model.bn1(output)
+        output = model.relu(output)
+        output = model.maxpool(output)
 
-            elif name == "resnet18":
+        output = model.layer1(output)
+        output = model.layer2(output)
+        output = model.layer3(output)
+        output = model.layer4(output)
 
-                output = model.conv1(image)
-                output = model.bn1(output)
-                output = model.relu(output)
-                output = model.maxpool(output)
+        output = model.avgpool(output)
+        output = torch.flatten(output, 1)
 
-                output = model.layer1(output)
-                output = model.layer2(output)
-                output = model.layer3(output)
-                output = model.layer4(output)
+        features.append(output)
 
-                output = model.avgpool(output)
+        # --------------------------------------------------
+        # DenseNet-201
+        # --------------------------------------------------
 
-                output = torch.flatten(
-                    output,
-                    1,
-                )
+        model = self.backbones["densenet201"]
 
-            elif name == "densenet201":
+        output = model.features(image)
 
-                output = model.features(
-                    image
-                )
+        output = F.relu(
+            output,
+            inplace=False,
+        )
 
-                output = F.relu(
-                    output,
-                    inplace=False,
-                )
+        output = F.adaptive_avg_pool2d(
+            output,
+            (1, 1),
+        )
 
-                output = F.adaptive_avg_pool2d(
-                    output,
-                    (1, 1),
-                )
+        output = torch.flatten(output, 1)
 
-                output = torch.flatten(
-                    output,
-                    1,
-                )
+        features.append(output)
 
-            elif name == "mobilenet_v3_large":
+        # --------------------------------------------------
+        # MobileNetV3-Large
+        # --------------------------------------------------
 
-                output = model.features(
-                    image
-                )
+        model = self.backbones["mobilenet_v3_large"]
 
-                output = model.avgpool(
-                    output
-                )
+        output = model.features(image)
+        output = model.avgpool(output)
+        output = torch.flatten(output, 1)
 
-                output = torch.flatten(
-                    output,
-                    1,
-                )
+        features.append(output)
 
-            features.append(output)
+        # --------------------------------------------------
+        # Feature-level fusion input
+        # --------------------------------------------------
 
         return torch.cat(
             features,
@@ -396,14 +368,66 @@ class FusionGradCAM:
         )
 
     # ======================================================
+    # Resolve target class
+    # ======================================================
+
+    def _get_target_index(
+        self,
+        target_class: str | int | None,
+        predicted_index: int,
+    ) -> int:
+        """
+        Select the class whose score will be explained.
+
+        If target_class is omitted, explain the predicted class.
+        """
+
+        if target_class is None:
+            return predicted_index
+
+        if isinstance(target_class, str):
+
+            if target_class not in CLASS_NAMES:
+                raise ValueError(
+                    f"Unknown target class: {target_class}. "
+                    f"Expected one of: {CLASS_NAMES}"
+                )
+
+            return CLASS_NAMES.index(target_class)
+
+        target_index = int(target_class)
+
+        if not 0 <= target_index < len(CLASS_NAMES):
+            raise ValueError(
+                f"Invalid target class index: {target_index}"
+            )
+
+        return target_index
+
+    # ======================================================
     # Generate Grad-CAM explanation
     # ======================================================
 
     def generate(
         self,
-        image_path,
-        target_class=None,
-    ):
+        image_path: str | Path,
+        target_class: str | int | None = None,
+    ) -> dict[str, Any]:
+        """
+        Generate Grad-CAM for one MRI image.
+
+        Args:
+            image_path:
+                Path to the MRI image.
+
+            target_class:
+                Optional class name or class index.
+                If omitted, explains the predicted class.
+
+        Returns:
+            Prediction information, class probabilities,
+            individual heatmaps, and combined heatmap.
+        """
 
         image_path = Path(image_path)
 
@@ -412,31 +436,41 @@ class FusionGradCAM:
                 f"Image not found: {image_path}"
             )
 
-        # ----------------------------------------------
-        # Reset previous activations
-        # ----------------------------------------------
+        # --------------------------------------------------
+        # Reset stored activations
+        # --------------------------------------------------
 
         self.activations = {}
 
-        # ----------------------------------------------
-        # Load image
-        # ----------------------------------------------
+        # --------------------------------------------------
+        # Load and preprocess MRI
+        # --------------------------------------------------
 
-        original_image = Image.open(
-            image_path
-        ).convert("RGB")
+        try:
+            original_image = Image.open(
+                image_path
+            ).convert("RGB")
+
+        except Exception as exc:
+            raise ValueError(
+                f"Unable to read MRI image: {image_path}"
+            ) from exc
 
         image_tensor = self.transform(
             original_image
-        ).unsqueeze(0).to(
-            self.device
-        )
+        ).unsqueeze(0).to(self.device)
 
-        image_tensor.requires_grad_(True)
-
-        # ----------------------------------------------
+        # --------------------------------------------------
         # Forward pass
-        # ----------------------------------------------
+        #
+        # Do not wrap this section in torch.no_grad().
+        # Grad-CAM requires gradients from the target score.
+        # --------------------------------------------------
+
+        self.fusion_head.zero_grad(set_to_none=True)
+
+        for model in self.backbones.values():
+            model.zero_grad(set_to_none=True)
 
         features = self._extract_features(
             image_tensor
@@ -458,80 +492,40 @@ class FusionGradCAM:
             ).item()
         )
 
-        predicted_class = (
-            CLASS_NAMES[predicted_index]
-        )
+        predicted_class = CLASS_NAMES[predicted_index]
 
         confidence = float(
-            probabilities[
-                0,
-                predicted_index,
-            ].item()
+            probabilities[0, predicted_index].item()
         )
 
-        # ----------------------------------------------
-        # Target class
-        # ----------------------------------------------
+        # --------------------------------------------------
+        # Select target class
+        # --------------------------------------------------
 
-        if target_class is None:
-            target_index = predicted_index
+        target_index = self._get_target_index(
+            target_class=target_class,
+            predicted_index=predicted_index,
+        )
 
-        elif isinstance(target_class, str):
+        selected_target_class = CLASS_NAMES[target_index]
 
-            if target_class not in CLASS_NAMES:
-                raise ValueError(
-                    f"Unknown target class: {target_class}"
-                )
+        # --------------------------------------------------
+        # Backward pass from selected class logit
+        # --------------------------------------------------
 
-            target_index = CLASS_NAMES.index(
-                target_class
-            )
-
-        else:
-
-            target_index = int(
-                target_class
-            )
-
-            if not (
-                0 <= target_index < len(CLASS_NAMES)
-            ):
-                raise ValueError(
-                    f"Invalid target class index: {target_index}"
-                )
-
-        # ----------------------------------------------
-        # Backward pass
-        # ----------------------------------------------
-
-        self.fusion_head.zero_grad()
-
-        for model in self.backbones.values():
-            model.zero_grad()
-
-        target_score = logits[
-            0,
-            target_index,
-        ]
+        target_score = logits[0, target_index]
 
         target_score.backward()
 
-        # ----------------------------------------------
-        # Generate individual CAMs
-        # ----------------------------------------------
+        # --------------------------------------------------
+        # Generate individual backbone Grad-CAM maps
+        # --------------------------------------------------
 
-        heatmaps = {}
+        heatmaps: dict[str, np.ndarray] = {}
 
-        for name in [
-            "efficientnet_b0",
-            "resnet18",
-            "densenet201",
-            "mobilenet_v3_large",
-        ]:
+        for name in BACKBONE_ORDER:
 
-            activation = self.activations.get(
-                name
-            )
+            activation = self.activations.get(name)
 
             if activation is None:
                 raise RuntimeError(
@@ -546,62 +540,45 @@ class FusionGradCAM:
                 )
 
             heatmaps[name] = self._compute_cam(
-                activation,
-                gradient,
+                activation=activation,
+                gradient=gradient,
             )
 
-        # ----------------------------------------------
-        # Combine heatmaps
-        # ----------------------------------------------
+        # --------------------------------------------------
+        # Combine the individual maps
+        # --------------------------------------------------
 
-        combined_heatmap = (
-            self._combine_heatmaps(
-                heatmaps
-            )
+        combined_heatmap = self._combine_heatmaps(
+            heatmaps
         )
 
-        # ----------------------------------------------
-        # Class probabilities
-        # ----------------------------------------------
+        # --------------------------------------------------
+        # Return class probabilities
+        # --------------------------------------------------
 
         class_probabilities = {
-            CLASS_NAMES[index]:
-                float(
-                    probabilities[
-                        0,
-                        index,
-                    ].item()
-                )
-            for index in range(
-                len(CLASS_NAMES)
+            CLASS_NAMES[index]: float(
+                probabilities[0, index].item()
             )
+            for index in range(len(CLASS_NAMES))
         }
 
         return {
-            "image_path": str(
-                image_path
-            ),
+            "image_path": str(image_path),
 
-            "predicted_class":
-                predicted_class,
+            "predicted_class": predicted_class,
 
-            "predicted_class_index":
-                predicted_index,
+            "predicted_class_index": predicted_index,
 
-            "target_class":
-                CLASS_NAMES[target_index],
+            "target_class": selected_target_class,
 
-            "confidence":
-                confidence,
+            "confidence": confidence,
 
-            "class_probabilities":
-                class_probabilities,
+            "class_probabilities": class_probabilities,
 
-            "heatmaps":
-                heatmaps,
+            "heatmaps": heatmaps,
 
-            "combined_heatmap":
-                combined_heatmap,
+            "combined_heatmap": combined_heatmap,
         }
 
     # ======================================================
@@ -610,22 +587,42 @@ class FusionGradCAM:
 
     def _compute_cam(
         self,
-        activation,
-        gradient,
-    ):
+        activation: torch.Tensor,
+        gradient: torch.Tensor,
+    ) -> np.ndarray:
+        """
+        Calculate Grad-CAM from one backbone activation.
 
-        # ----------------------------------------------
+        Gradients are globally averaged over spatial dimensions
+        to obtain channel weights. The weighted activations are
+        summed, passed through ReLU, resized, and normalized.
+        """
+
+        if activation.ndim != 4:
+            raise ValueError(
+                "Expected activation shape [batch, channels, height, width], "
+                f"received {tuple(activation.shape)}."
+            )
+
+        if gradient.shape != activation.shape:
+            raise ValueError(
+                "Activation and gradient shapes do not match. "
+                f"Activation: {tuple(activation.shape)}, "
+                f"gradient: {tuple(gradient.shape)}."
+            )
+
+        # --------------------------------------------------
         # Global average pooling of gradients
-        # ----------------------------------------------
+        # --------------------------------------------------
 
         weights = gradient.mean(
             dim=(2, 3),
             keepdim=True,
         )
 
-        # ----------------------------------------------
-        # Weighted activation maps
-        # ----------------------------------------------
+        # --------------------------------------------------
+        # Weighted sum of feature maps
+        # --------------------------------------------------
 
         cam = (
             weights * activation
@@ -634,44 +631,37 @@ class FusionGradCAM:
             keepdim=True,
         )
 
-        # ----------------------------------------------
-        # ReLU
-        # ----------------------------------------------
+        # --------------------------------------------------
+        # Keep positive evidence
+        # --------------------------------------------------
 
-        cam = F.relu(
-            cam
-        )
+        cam = F.relu(cam)
 
-        # ----------------------------------------------
-        # Resize to 224 x 224
-        # ----------------------------------------------
+        # --------------------------------------------------
+        # Resize to model input dimensions
+        # --------------------------------------------------
 
         cam = F.interpolate(
             cam,
-            size=(224, 224),
+            size=(IMAGE_SIZE, IMAGE_SIZE),
             mode="bilinear",
             align_corners=False,
         )
 
-        # ----------------------------------------------
-        # Remove batch/channel dimensions
-        # ----------------------------------------------
+        # --------------------------------------------------
+        # Remove batch and channel dimensions
+        # --------------------------------------------------
 
-        cam = cam[
-            0,
-            0,
-        ]
+        cam = cam[0, 0]
 
-        # ----------------------------------------------
-        # Normalize
-        # ----------------------------------------------
+        # --------------------------------------------------
+        # Normalize to [0, 1]
+        # --------------------------------------------------
 
         cam_min = cam.min()
         cam_max = cam.max()
 
-        if (
-            cam_max - cam_min
-        ) > 1e-8:
+        if float((cam_max - cam_min).detach().cpu()) > 1e-8:
 
             cam = (
                 cam - cam_min
@@ -680,12 +670,14 @@ class FusionGradCAM:
             )
 
         else:
+            cam = torch.zeros_like(cam)
 
-            cam = torch.zeros_like(
-                cam
-            )
-
-        return cam.detach().cpu().numpy()
+        return (
+            cam.detach()
+            .cpu()
+            .numpy()
+            .astype(np.float32)
+        )
 
     # ======================================================
     # Combine heatmaps
@@ -693,48 +685,58 @@ class FusionGradCAM:
 
     def _combine_heatmaps(
         self,
-        heatmaps,
-    ):
+        heatmaps: dict[str, np.ndarray],
+    ) -> np.ndarray:
+        """
+        Combine the four backbone heatmaps using an equal-weight
+        average, then normalize the combined map.
+
+        This produces a combined attention visualization. It
+        should not be interpreted as a tumor segmentation mask.
+        """
 
         heatmap_tensors = []
 
-        for name in [
-            "efficientnet_b0",
-            "resnet18",
-            "densenet201",
-            "mobilenet_v3_large",
-        ]:
+        for name in BACKBONE_ORDER:
 
-            heatmap = torch.tensor(
+            if name not in heatmaps:
+                raise KeyError(
+                    f"Missing Grad-CAM heatmap for {name}."
+                )
+
+            heatmap = torch.as_tensor(
                 heatmaps[name],
                 dtype=torch.float32,
             )
 
-            heatmap_tensors.append(
-                heatmap
-            )
+            if tuple(heatmap.shape) != (
+                IMAGE_SIZE,
+                IMAGE_SIZE,
+            ):
+                raise ValueError(
+                    f"Unexpected heatmap size for {name}: "
+                    f"{tuple(heatmap.shape)}"
+                )
 
-        # ----------------------------------------------
+            heatmap_tensors.append(heatmap)
+
+        # --------------------------------------------------
         # Equal-weight average
-        # ----------------------------------------------
+        # --------------------------------------------------
 
         combined = torch.stack(
             heatmap_tensors,
             dim=0,
-        ).mean(
-            dim=0
-        )
+        ).mean(dim=0)
 
-        # ----------------------------------------------
+        # --------------------------------------------------
         # Normalize combined map
-        # ----------------------------------------------
+        # --------------------------------------------------
 
         combined_min = combined.min()
         combined_max = combined.max()
 
-        if (
-            combined_max - combined_min
-        ) > 1e-8:
+        if float((combined_max - combined_min).cpu()) > 1e-8:
 
             combined = (
                 combined - combined_min
@@ -743,96 +745,70 @@ class FusionGradCAM:
             )
 
         else:
+            combined = torch.zeros_like(combined)
 
-            combined = torch.zeros_like(
-                combined
-            )
-
-        return combined.numpy()
+        return (
+            combined
+            .cpu()
+            .numpy()
+            .astype(np.float32)
+        )
 
     # ======================================================
-    # Test
+    # Standalone test
     # ======================================================
 
     def test(
         self,
-        image_path,
-    ):
+        image_path: str | Path,
+    ) -> dict[str, Any]:
+        """
+        Run Grad-CAM and print the prediction details.
+        """
 
-        print(
-            "\nTesting MedExplain AI Grad-CAM..."
-        )
+        print("\nTesting MedExplain AI Grad-CAM...")
 
-        result = self.generate(
-            image_path
-        )
+        result = self.generate(image_path)
 
-        print(
-            "\nPrediction:"
-        )
-
-        print(
-            f"  Class: {result['predicted_class']}"
-        )
-
+        print("\nPrediction:")
+        print(f"  Class: {result['predicted_class']}")
         print(
             f"  Confidence: "
-            f"{result['confidence'] * 100:.2f}%"
+            f"{result['confidence'] * 100:.4f}%"
         )
 
-        print(
-            "\nClass probabilities:"
-        )
+        print("\nClass probabilities:")
 
-        for (
-            class_name,
-            probability,
-        ) in result[
-            "class_probabilities"
-        ].items():
-
+        for class_name, probability in (
+            result["class_probabilities"].items()
+        ):
             print(
                 f"  {class_name}: "
-                f"{probability * 100:.2f}%"
+                f"{probability * 100:.6f}%"
             )
 
-        print(
-            "\nIndividual Grad-CAM heatmaps:"
-        )
+        print("\nIndividual Grad-CAM heatmaps:")
 
-        for (
-            name,
-            heatmap,
-        ) in result[
-            "heatmaps"
-        ].items():
-
+        for name, heatmap in result["heatmaps"].items():
             print(
-                f"  {name}: "
-                f"{heatmap.shape}"
+                f"  {name}: {heatmap.shape}"
             )
 
+        print("\nCombined Grad-CAM:")
         print(
-            "\nCombined Grad-CAM:"
-        )
-
-        print(
-            f"  Shape: "
-            f"{result['combined_heatmap'].shape}"
+            f"  Shape: {result['combined_heatmap'].shape}"
         )
 
         return result
 
 
 # ==========================================================
-# Standalone test
+# Standalone execution
 # ==========================================================
 
 if __name__ == "__main__":
 
-    print(
-        "\nTesting MedExplain AI Grad-CAM..."
-    )
+    print("\nTesting MedExplain AI Grad-CAM...")
 
     test_image = (
         PROJECT_ROOT
@@ -846,13 +822,11 @@ if __name__ == "__main__":
 
     gradcam = FusionGradCAM()
 
-    result = gradcam.test(
-        test_image
-    )
+    result = gradcam.test(test_image)
 
-    # ======================================================
-    # Visualization
-    # ======================================================
+    # ------------------------------------------------------
+    # Save combined visualization
+    # ------------------------------------------------------
 
     try:
 
@@ -868,98 +842,24 @@ if __name__ == "__main__":
             / "gradcam"
         )
 
-        print(
-            "\nSaving Grad-CAM visualizations..."
+        print("\nSaving combined Grad-CAM visualization...")
+
+        paths = save_gradcam_visualization(
+            image_path=test_image,
+            heatmap=result["combined_heatmap"],
+            predicted_class=result["predicted_class"],
+            output_dir=output_directory,
         )
 
-        for (
-            backbone_name,
-            heatmap,
-        ) in result[
-            "heatmaps"
-        ].items():
+        print("\nCombined Grad-CAM files:")
 
-            paths = (
-                save_gradcam_visualization(
-                    image_path=test_image,
-                    heatmap=heatmap,
-                    backbone_name=backbone_name,
-                    output_directory=output_directory,
-                    prediction=result[
-                        "predicted_class"
-                    ],
-                    confidence=result[
-                        "confidence"
-                    ],
-                )
-            )
+        print(f"  Original: {paths['original']}")
+        print(f"  Heatmap : {paths['heatmap']}")
+        print(f"  Overlay : {paths['overlay']}")
 
-            print(
-                f"\n{backbone_name}:"
-            )
-
-            print(
-                f"  Original : "
-                f"{paths['original']}"
-            )
-
-            print(
-                f"  Heatmap  : "
-                f"{paths['heatmap']}"
-            )
-
-            print(
-                f"  Overlay  : "
-                f"{paths['overlay']}"
-            )
-
-        combined_paths = (
-            save_gradcam_visualization(
-                image_path=test_image,
-                heatmap=result[
-                    "combined_heatmap"
-                ],
-                backbone_name="fusion",
-                output_directory=output_directory,
-                prediction=result[
-                    "predicted_class"
-                ],
-                confidence=result[
-                    "confidence"
-                ],
-            )
-        )
-
-        print(
-            "\nFusion Grad-CAM:"
-        )
-
-        print(
-            f"  Original : "
-            f"{combined_paths['original']}"
-        )
-
-        print(
-            f"  Heatmap  : "
-            f"{combined_paths['heatmap']}"
-        )
-
-        print(
-            f"  Overlay  : "
-            f"{combined_paths['overlay']}"
-        )
-
-        print(
-            "\nGrad-CAM visualization generation "
-            "completed successfully."
-        )
+        print("\nGrad-CAM visualization completed.")
 
     except Exception as error:
 
-        print(
-            "\nVisualization generation failed:"
-        )
-
-        print(
-            error
-        )
+        print("\nVisualization generation failed:")
+        print(error)
